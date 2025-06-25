@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/yaikob92/ecommerce/config"
-	"github.com/yaikob92/ecommerce/pkg/jwt"
+	"backend/config"
+	"backend/pkg/jwt"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -104,14 +104,14 @@ func (h *Handler) Login(c *gin.Context) {
 	}
 
 	// Generate Access Token (15 mins)
-	accessToken, err := jwt.GenerateAccessToken(user.ID, user.Email, user.Role, h.config.JWTSecret)
+	accessToken, err := jwt.GenerateAccessToken(user.ID, user.Email, user.Role, h.config.JWT.Secret)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate access token"})
 		return
 	}
 
 	// Generate Refresh Token (7 days)
-	refreshToken, err := jwt.GenerateRefreshToken(user.ID, h.config.JWTSecret)
+	refreshToken, err := jwt.GenerateRefreshToken(user.ID, h.config.JWT.Secret)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate refresh token"})
 		return
@@ -158,7 +158,7 @@ func (h *Handler) Refresh(c *gin.Context) {
 	}
 
 	// 1. Validate the refresh token signature and expiry
-	userID, err := jwt.ValidateRefreshToken(req.RefreshToken, h.config.JWTSecret)
+	userID, err := jwt.ValidateRefreshToken(req.RefreshToken, h.config.JWT.Secret)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired refresh token"})
 		return
@@ -179,14 +179,14 @@ func (h *Handler) Refresh(c *gin.Context) {
 	}
 
 	// 4. Generate new Access Token
-	newAccessToken, err := jwt.GenerateAccessToken(user.ID, user.Email, user.Role, h.config.JWTSecret)
+	newAccessToken, err := jwt.GenerateAccessToken(user.ID, user.Email, user.Role, h.config.JWT.Secret)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate access token"})
 		return
 	}
 
 	// 5. Generate new Refresh Token (optional: rotate tokens)
-	newRefreshToken, err := jwt.GenerateRefreshToken(user.ID, h.config.JWTSecret)
+	newRefreshToken, err := jwt.GenerateRefreshToken(user.ID, h.config.JWT.Secret)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate refresh token"})
 		return

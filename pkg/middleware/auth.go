@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/yaikob92/ecommerce/pkg/jwt"
+	"backend/pkg/jwt"
 )
 
 // AuthMiddleware checks the Authorization header for a valid JWT token

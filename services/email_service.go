@@ -104,7 +104,7 @@ func (s *emailService) SendPasswordResetEmail(ctx context.Context, toEmail, toke
         </p>
         <hr style="border: none; border-top: 1px solid #3d3d54; margin: 30px 0;">
         <p style="color: #606070; font-size: 12px; text-align: center;">
-            If you didn't request a password reset, you can safely ignore this email.
+            This email was sent to %s. If you didn't request a password reset, you can safely ignore this email.
         </p>
     </div>
 </body>

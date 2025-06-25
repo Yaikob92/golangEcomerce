@@ -1,2 +1,36 @@
+# Binaries and executables
 server
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Environment files
 .env
+.env.*
+!.env.example
+
+# Uploaded user media
+uploads/*
+!uploads/.gitkeep
+!uploads/avatars/
+uploads/avatars/*
+!uploads/avatars/.gitkeep
+
+# Testing & coverage
+*.cover
+coverage.txt
+coverage.out
+coverage.html
+
+# IDE & OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

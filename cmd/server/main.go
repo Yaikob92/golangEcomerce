@@ -3,25 +3,31 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"backend/config"
+	"backend/controllers"
+	"backend/database"
+	_ "backend/docs"
+	"backend/middleware"
+	"backend/repositories"
+	"backend/routes"
+	"backend/services"
+
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
-	"github.com/yaikob92/ecommerce/config"
-	_ "github.com/yaikob92/ecommerce/docs" // Swagger generated docs
-	"github.com/yaikob92/ecommerce/internal/auth"
-	"github.com/yaikob92/ecommerce/pkg/database"
-	"github.com/yaikob92/ecommerce/pkg/middleware"
 )
 
-// @title           E-Commerce API
+// @title           Fashion E-Commerce API
 // @version         1.0
-// @description     A high-performance Go e-commerce backend API with JWT authentication
+// @description     A high-performance Go e-commerce backend API with full authentication and role-based access control.
 // @termsOfService  http://swagger.io/terms/
 
 // @contact.name   API Support
@@ -42,83 +48,120 @@ func main() {
 	// 1. Load Configuration
 	cfg := config.LoadConfig()
 
-	// 2. Setup Database Connection
-	db, err := database.ConnectPostgres(cfg.Database.URL)
+	// 2. Setup PostgreSQL Pool Connection
+	pool, err := database.InitPostgres(cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		log.Fatalf("Failed to connect to PostgreSQL: %v", err)
 	}
-	
-	sqlDB, err := db.DB()
-	if err == nil {
-		defer sqlDB.Close()
+	defer pool.Close()
+
+	// 3. Optional Redis Connection for Rate Limiting
+	var redisClient *redis.Client
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL != "" {
+		rc, err := database.InitRedis(redisURL)
+		if err != nil {
+			slog.Warn("Redis connection failed, rate limiting fallback enabled", slog.Any("error", err))
+		} else {
+			redisClient = rc
+			defer redisClient.Close()
+		}
 	}
 
-	// Auto Migrate models
-	err = db.AutoMigrate(&auth.User{}, &auth.RefreshToken{})
-	if err != nil {
-		log.Fatalf("Failed to run auto-migrations: %v", err)
-	}
+	// 4. Initialize Repositories
+	userRepo := repositories.NewUserRepository(pool)
+	sessionRepo := repositories.NewSessionRepository(pool)
+	tokenRepo := repositories.NewTokenRepository(pool)
+	auditRepo := repositories.NewAuditRepository(pool)
+	brandRepo := repositories.NewBrandRepository(pool)
+	categoryRepo := repositories.NewCategoryRepository(pool)
+	productRepo := repositories.NewProductRepository(pool)
+	productImageRepo := repositories.NewProductImageRepository(pool)
+	orderRepo := repositories.NewOrderRepository(pool)
+	superAdminRepo := repositories.NewSuperAdminRepository(pool)
 
-	// 3. Configure Web Framework (Gin)
-	gin.SetMode(gin.ReleaseMode)
+	// 5. Initialize Services
+	emailSvc := services.NewEmailService(
+		cfg.SMTP.Host,
+		cfg.SMTP.Port,
+		cfg.SMTP.Username,
+		cfg.SMTP.Password,
+		cfg.SMTP.From,
+		cfg.FrontendURL,
+	)
+	authSvc := services.NewAuthService(
+		userRepo,
+		sessionRepo,
+		tokenRepo,
+		auditRepo,
+		emailSvc,
+		cfg,
+	)
+	rateLimitSvc := services.NewRateLimitService(redisClient)
+	brandSvc := services.NewBrandService(brandRepo, productRepo)
+	categorySvc := services.NewCategoryService(categoryRepo, productRepo)
+	productSvc := services.NewProductService(productRepo, productImageRepo, categoryRepo, brandRepo)
+	productImageSvc := services.NewProductImageService(productImageRepo, productRepo)
+	orderSvc := services.NewOrderService(orderRepo)
+	customerSvc := services.NewCustomerService(pool)
+	superAdminSvc := services.NewSuperAdminService(superAdminRepo, userRepo, auditRepo)
+
+	// 6. Initialize Controllers
+	authCtrl := controllers.NewAuthController(authSvc, cfg.Env)
+	adminDashCtrl := controllers.NewAdminDashboardController(superAdminSvc)
+	categoryCtrl := controllers.NewCategoryController(categorySvc)
+	brandCtrl := controllers.NewBrandController(brandSvc)
+	productCtrl := controllers.NewProductController(productSvc, productImageSvc)
+	orderCtrl := controllers.NewOrderController(orderSvc)
+	customerCtrl := controllers.NewCustomerController(customerSvc)
+	superAdminCtrl := controllers.NewSuperAdminController(superAdminSvc, cfg.Env)
+
+	// 7. Setup Router & Middlewares
+	if cfg.Env == "production" {
+		gin.SetMode(gin.ReleaseMode)
+	}
 	router := gin.New()
+	router.Use(gin.Logger())
+	router.Use(gin.Recovery())
 
-	// 4. Setup Middlewares
-	router.Use(middleware.Logger())
-	router.Use(middleware.ErrorRecovery())
+	// CORS & CSRF
+	router.Use(middleware.CORSMiddleware())
+	router.Use(middleware.CSRFMiddleware())
 
-	// 5. Initialize Repository & Handler
-	authRepo := auth.NewRepository(db)
-	authHandler := auth.NewHandler(authRepo, cfg)
+	// Auth Middleware
+	authMiddleware := middleware.JWTAuthMiddleware(cfg.JWT)
 
-	// 6. Setup Routes
-	v1 := router.Group("/api/v1")
-	{
-		// Public Auth routes
-		auth.RegisterRoutes(v1, authHandler)
+	// Static route for uploaded avatars
+	router.Static("/uploads", "./uploads")
 
-		// Health check route
-		v1.GET("/health", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"status": "ok", "db": "connected"})
-		})
+	// Health check endpoint
+	router.GET("/ping", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "timestamp": time.Now().Unix()})
+	})
 
-		// Protected Route Example
-		v1.GET("/profile", middleware.AuthMiddleware(cfg.JWTSecret), func(c *gin.Context) {
-			userID := c.GetString("user_id")
-			email := c.GetString("email")
-			role := c.GetString("role")
-			c.JSON(http.StatusOK, gin.H{
-				"message": "Welcome to your profile!",
-				"user_id": userID,
-				"email":   email,
-				"role":    role,
-			})
-		})
+	// 8. Register Routes
+	routes.SetupAuthRoutes(router, authCtrl, rateLimitSvc, authMiddleware)
+	routes.SetupAdminProductRoutes(router, adminDashCtrl, categoryCtrl, brandCtrl, productCtrl, orderCtrl, customerCtrl, authMiddleware)
+	routes.SetupSuperAdminRoutes(router, superAdminCtrl, authMiddleware)
+	routes.SetupStoreRoutes(router, categoryCtrl, brandCtrl, productCtrl)
 
-		// Admin Route Example
-		v1.GET("/admin/dashboard", middleware.AuthMiddleware(cfg.JWTSecret), middleware.RoleMiddleware("admin"), func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"message": "Welcome, Administrator!"})
-		})
-	}
-
-	// Swagger documentation route
+	// Swagger documentation
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	// 7. Start Server with Graceful Shutdown
+	// 9. Start HTTP Server with Graceful Shutdown
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: router,
 	}
 
 	go func() {
-		log.Printf("Server is running on port %s...", cfg.Port)
+		log.Printf("Server running in %s mode on port %s...", cfg.Env, cfg.Port)
 		log.Printf("Swagger UI available at http://localhost:%s/swagger/index.html", cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Listen and serve error: %v", err)
 		}
 	}()
 
-	// Wait for interrupt signal to gracefully shutdown the server
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
@@ -130,5 +173,5 @@ func main() {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
-	log.Println("Server exiting")
+	log.Println("Server exited cleanly")
 }
