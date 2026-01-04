@@ -1,3 +1,3 @@
-module githuh.com/yaikob92
+module github.com/yaikob92/ecommerce
 
 go 1.25.5
