@@ -12,6 +12,7 @@ type Config struct {
 	Database struct {
 		URL string
 	}
+	JWTSecret string
 }
 
 func LoadConfig() *Config {
@@ -30,6 +31,11 @@ func LoadConfig() *Config {
 	cfg.Database.URL = os.Getenv("DATABASE_URL")
 	if cfg.Database.URL == "" {
 		log.Fatal("DATABASE_URL environment variable is required")
+	}
+
+	cfg.JWTSecret = os.Getenv("JWT_SECRET")
+	if cfg.JWTSecret == "" {
+		log.Fatal("JWT_SECRET environment variable is required")
 	}
 
 	return cfg
